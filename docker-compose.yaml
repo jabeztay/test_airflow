@@ -1,0 +1,103 @@
+version: '3'
+x-airflow-common:
+  &airflow-common
+  image: apache/airflow:2.1.2-python3.8
+  environment:
+    &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKEND: 'airflow.api.auth.backend.basic_auth'
+    AIRFLOW_CONN_SOURCE_DB: postgresql+psycopg2://source:source@source-db/source
+    AIRFLOW_CONN_TARGET_DB: postgresql+psycopg2://target:target@target-db/target
+    _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+  user: "${AIRFLOW_UID:-50000}:${AIRFLOW_GID:-50000}"
+  depends_on:
+    airflow-db:
+      condition: service_healthy
+
+services:
+  airflow-db:
+    image: postgres:13.4
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 5
+    restart: always
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - 5884:8080
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type SchedulerJob --hostname "$${HOSTNAME}"']
+      interval: 10s
+      timeout: 10s
+      retries: 5
+    restart: always
+
+  airflow-init:
+    <<: *airflow-common
+    command: version
+    environment:
+      <<: *airflow-common-env
+      _AIRFLOW_DB_UPGRADE: 'true'
+      _AIRFLOW_WWW_USER_CREATE: 'true'
+      _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
+      _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
+
+  source-db:
+    image: postgres:13.4
+    restart: always
+    environment:
+      POSTGRES_USER: source
+      POSTGRES_PASSWORD: source
+      POSTGRES_DB: source
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "source"]
+      interval: 5s
+      retries: 5
+    volumes:
+      - source-db-volume:/var/lib/postgresql/data
+
+  target-db:
+    image: postgres:13.4
+    restart: always
+    environment:
+      POSTGRES_USER: target
+      POSTGRES_PASSWORD: target
+      POSTGRES_DB: target
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "target"]
+      interval: 5s
+      retries: 5
+    volumes:
+      - target-db-volume:/var/lib/postgresql/data
+
+volumes:
+  airflow-db-volume:
+  source-db-volume:
+  target-db-volume:
